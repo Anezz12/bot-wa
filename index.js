@@ -1,38 +1,63 @@
-const { DisconnectReason, useSingleFileAuthState} = require('@adiwajshing/baileys');
-const makeWASocket = require('@adiwajshing/baileys').default;
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@adiwajshing/baileys');
+const Pino = require("pino");
 
-const startSock = () => {
-    const {state, saveState} = useSingleFileAuthState('./auth.json');
-    const sock = makeWASocket({
-        printQRInTerminal: true,
-        auth: state
-    });
+const startSock = async () => {
+	const { state, saveCreds } = await useMultiFileAuthState('./auth');
+	const sock = makeWASocket({
+		logger: Pino({ level: "silent" }), // biar gak banyak log
+		printQRInTerminal: true,
+		auth: state,
+		// Fix template Message
+		patchMessageBeforeSending: (message) => {
+			const requiresPatch = !!(
+				message.buttonsMessage ||
+				message.templateMessage ||
+				message.listMessage
+			);
+			if (requiresPatch) {
+				message = {
+					viewOnceMessage: {
+						message: {
+							messageContextInfo: {
+								deviceListMetadataVersion: 2,
+								deviceListMetadata: {},
+							},
+							...message,
+						},
+					},
+				};
+			}
+			return message;
+		}
+	});
 
-    sock.ev.on('connection.update', function (update, connection2) {
-        let _a, _b;
-        let connection = update.connection, lastDisconnet = update.lastDisconnet;
-        if (connection == 'close') {
-            if (((_b = (_a = lastDisconnet.error) === null
-            || _a === void 0 ? void 0 : _a.output) === null
-            || _b === void 0 ? void 0 : _b.statusCode) !==  DisconnectReason.loggedOut) {
-               startSock()   
-            }
+	sock.ev.on('connection.update', (update) => {
+		const { connection, lastDisconnect } = update;
+		const reason = lastDisconnect?.error
+		if (connection == "close") {
+			if (reason !== DisconnectReason.loggedOut) {
+				startSock();
+			} else {
+				console.log("Connection closed. You are logged out");
+				process.exit();
+			}
+		}
+		if (connection == "open") {
+			console.log({ connection });
+		}
+	});
 
-        } else {
-            console.log('connection closed')
-        }
+	sock.ev.on('creds.update', async ( ) => {
+		await saveCreds()
+	});
 
-        console.log('connection update ', update);
-    });
-
-    sock.ev.on('creds.update', saveState);
-
-    sock.ev.on('messages.upsert', async m => {
-        const message = m.messages[0];
-
-        console.log("COBA 1 : "+message.key.remoteJid);
-        
-    });
+	sock.ev.on('messages.upsert', async (m) => {
+		if (m.type == "notify") {
+			const message = m.messages[0];
+			console.log("COBA 1 : " + message.key.remoteJid);
+			console.log((message))
+		}
+	});
 }
 
 startSock();
